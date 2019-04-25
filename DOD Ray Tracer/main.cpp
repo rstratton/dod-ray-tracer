@@ -158,8 +158,8 @@ void createPrimaryRays(Camera camera, Ray** pRays, int& numRays) {
         int rowOffset = i * camera.width;
         for (int j = 0; j < camera.width; ++j) {
             int rayIdx = rowOffset + j;
-            // NOTE: Primary rays all share the initial camera position.  Maybe primary rays should be
-            // a different struct since they'll all share the same position.
+            // NOTE: Primary rays all share the initial camera position. It's a bit
+            // wasteful to duplicate this position in all of these rays.
             rays[rayIdx].pos = camera.pos;
             rays[rayIdx].dir = Vector(w_start + j * w_step, h_start + i * h_step, -1.f).normalized();
         }
@@ -256,10 +256,6 @@ void computeShadowMask(RayHit* rayHits, int numRayHits, PointLight* lights, int 
     for (int rayHitIdx = 0; rayHitIdx < numRayHits; ++rayHitIdx) {
         RayHit hit = rayHits[rayHitIdx];
 
-        if (rayHitIdx / (float)numRayHits > 0.9f) {
-            std::cout << "hi";
-        }
-
         if (!hit.hasHit) {
             continue;
         }
@@ -270,7 +266,7 @@ void computeShadowMask(RayHit* rayHits, int numRayHits, PointLight* lights, int 
             float lightDistanceSquared = lightDiff.sqmag();
             Vector lightDir = lightDiff.normalized();
 
-            Ray shadowRay(hit.pos + lightDir * 0.001f, lightDir);
+            Ray shadowRay(hit.pos + hit.norm * 0.001f, lightDir);
             RayHit shadowHit;
             bool hasHit = false;
 
@@ -301,6 +297,23 @@ void computeShadowMask(RayHit* rayHits, int numRayHits, PointLight* lights, int 
     }
 }
 
+void visualizeShadowMask(uint8_t* shadowMask, int numLights, int numRayHits, Vector* pixels) {
+    int numUints = (numRayHits * numLights) / 8 + 1;
+
+    for (int rayHitIdx = 0; rayHitIdx < numRayHits; ++rayHitIdx) {
+        for (int lightIdx = 0; lightIdx < numLights; ++lightIdx) {
+            int shadowMapBaseIdx = rayHitIdx * numLights + lightIdx;
+            int diffuseIdx = rayHitIdx;
+            bool shadowed = shadowMask[shadowMapBaseIdx / 8] & (1 << (shadowMapBaseIdx % 8));
+
+            if (shadowed) {
+                Vector color = lightIdx == 0 ? Vector(1.f, 0.f, 0.f) : Vector(0.f, 1.f, 1.f);
+                pixels[rayHitIdx] = pixels[rayHitIdx] + color;
+            }
+        }
+    }
+}
+
 void computePointLightDiffuse(RayHit* rayHits, int numRayHits, PointLight light, Vector* diffuseColor, uint8_t* shadowMask, int numLights, int lightIdx) {
     for (int rayHitIdx = 0; rayHitIdx < numRayHits; ++rayHitIdx) {
         RayHit hit = rayHits[rayHitIdx];
@@ -312,7 +325,7 @@ void computePointLightDiffuse(RayHit* rayHits, int numRayHits, PointLight light,
         int baseIdx = rayHitIdx * numLights + lightIdx;
         bool shadowed = shadowMask[baseIdx / 8] & (1 << (baseIdx % 8));
 
-        if (shadowed) return;
+        if (shadowed) continue;
 
         Vector lightDir = (light.pos - hit.pos).normalized();
         diffuseColor[rayHitIdx] = diffuseColor[rayHitIdx] + light.color * max(hit.norm.dot(lightDir), 0.f);
@@ -343,7 +356,6 @@ void writePPM(unsigned char *buf, int width, int height, const char *fn) {
     printf("Wrote image file %s\n", fn);
 }
 
-
 int main()
 {
     Camera camera;
@@ -366,17 +378,17 @@ int main()
         }
     }
 
-    int numPlanes = 1;
+    int numPlanes = 4;
     Plane* planes = new Plane[numPlanes];
     planes[0] = { { 0.f, -1.f, 0.f }, { 0.f, 1.f, 0.f } };
-    // planes[1] = { { 0.f, 0.f, -30.f }, { 0.f, 0.f, 1.f } };
-    // planes[2] = { { -20.f, 0.f, 0.f }, { 1.f, 0.f, 0.f } };
-    // planes[3] = { { 20.f, 0.f, 0.f }, { -1.f, 0.f, 0.f } };
+    planes[1] = { { 0.f, 0.f, -30.f }, { 0.f, 0.f, 1.f } };
+    planes[2] = { { -20.f, 0.f, 0.f }, { 1.f, 0.f, 0.f } };
+    planes[3] = { { 20.f, 0.f, 0.f }, { -1.f, 0.f, 0.f } };
 
     int numLights = 2;
     PointLight* pointLights = new PointLight[numLights];
-    pointLights[0] = { { 100.f, 100.f, 50.f }, { 1.f, 1.f, 0.8f } };
-    pointLights[1] = { { -100.f, 20.f, 20.f }, { 0.8f, 0.8f, 1.f } };
+    pointLights[0] = { { 19.f, 19.f, 10.f }, { 1.f, 1.f, 0.8f } };
+    pointLights[1] = { { -19.f, 10.f, -10.f }, { 0.8f, 0.8f, 1.f } };
 
     // Create primary rays
     int numRays;
