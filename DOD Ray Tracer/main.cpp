@@ -5,6 +5,8 @@
 
 #pragma warning(disable:4996)
 
+int hitCount = 0;
+
 inline float max(float a, float b) {
     return a > b ? a : b;
 }
@@ -242,13 +244,75 @@ void computeRayHits(Ray* rays, int numRays, Sphere* spheres, int numSpheres, Pla
     }
 }
 
-void computePointLightDiffuse(RayHit* rayHits, int numRayHits, PointLight light, Vector* diffuseColor) {
+void computeShadowMask(RayHit* rayHits, int numRayHits, PointLight* lights, int numLights, Sphere* spheres, int numSpheres, Plane* planes, int numPlanes, uint8_t** pShadowMask) {
+    int numUints = (numRayHits * numLights) / 8 + 1;
+    uint8_t* shadowMask = new uint8_t[numUints];
+    *pShadowMask = shadowMask;
+
+    for (int i = 0; i < numUints; ++i) {
+        shadowMask[i] = 0;
+    }
+
+    for (int rayHitIdx = 0; rayHitIdx < numRayHits; ++rayHitIdx) {
+        RayHit hit = rayHits[rayHitIdx];
+
+        if (rayHitIdx / (float)numRayHits > 0.9f) {
+            std::cout << "hi";
+        }
+
+        if (!hit.hasHit) {
+            continue;
+        }
+
+        for (int lightIdx = 0; lightIdx < numLights; ++lightIdx) {
+            PointLight light = lights[lightIdx];
+            Vector lightDiff = light.pos - hit.pos;
+            float lightDistanceSquared = lightDiff.sqmag();
+            Vector lightDir = lightDiff.normalized();
+
+            Ray shadowRay(hit.pos + lightDir * 0.001f, lightDir);
+            RayHit shadowHit;
+            bool hasHit = false;
+
+            // Spheres
+            for (int sphereIdx = 0; sphereIdx < numSpheres && !hasHit; ++sphereIdx) {
+                if (rayIntersectsSphere(shadowRay, spheres[sphereIdx], shadowHit)) {
+                    if ((shadowHit.pos - hit.pos).sqmag() < lightDistanceSquared) {
+                        hitCount += 1;
+                        hasHit = true;
+                        int baseIdx = rayHitIdx * numLights + lightIdx;
+                        shadowMask[baseIdx / 8] |= (1 << (baseIdx % 8));
+                    }
+                }
+            }
+
+            // Planes
+            for (int planeIdx = 0; planeIdx < numPlanes && !hasHit; ++planeIdx) {
+                if (rayIntersectsPlane(shadowRay, planes[planeIdx], shadowHit)) {
+                    if ((shadowHit.pos - hit.pos).sqmag() < lightDistanceSquared) {
+                        hitCount += 1;
+                        hasHit = true;
+                        int baseIdx = rayHitIdx * numLights + lightIdx;
+                        shadowMask[baseIdx / 8] |= (1 << (baseIdx % 8));
+                    }
+                }
+            }
+        }
+    }
+}
+
+void computePointLightDiffuse(RayHit* rayHits, int numRayHits, PointLight light, Vector* diffuseColor, uint8_t* shadowMask, int numLights, int lightIdx) {
     for (int rayHitIdx = 0; rayHitIdx < numRayHits; ++rayHitIdx) {
         RayHit hit = rayHits[rayHitIdx];
 
         if (!hit.hasHit) {
             continue;
         }
+
+        int baseIdx = rayHitIdx * numLights + lightIdx;
+        bool shadowed = shadowMask[baseIdx / 8] & (1 << (baseIdx % 8));
+
+        if (shadowed) return;
 
         Vector lightDir = (light.pos - hit.pos).normalized();
         diffuseColor[rayHitIdx] = diffuseColor[rayHitIdx] + light.color * max(hit.norm.dot(lightDir), 0.f);
@@ -302,12 +366,12 @@ int main()
         }
     }
 
-    int numPlanes = 4;
+    int numPlanes = 1;
     Plane* planes = new Plane[numPlanes];
     planes[0] = { { 0.f, -1.f, 0.f }, { 0.f, 1.f, 0.f } };
-    planes[1] = { { 0.f, 0.f, -30.f }, { 0.f, 0.f, 1.f } };
-    planes[2] = { { -20.f, 0.f, 0.f }, { 1.f, 0.f, 0.f } };
-    planes[3] = { { 20.f, 0.f, 0.f }, { -1.f, 0.f, 0.f } };
+    // planes[1] = { { 0.f, 0.f, -30.f }, { 0.f, 0.f, 1.f } };
+    // planes[2] = { { -20.f, 0.f, 0.f }, { 1.f, 0.f, 0.f } };
+    // planes[3] = { { 20.f, 0.f, 0.f }, { -1.f, 0.f, 0.f } };
 
     int numLights = 2;
     PointLight* pointLights = new PointLight[numLights];
@@ -323,6 +387,10 @@ int main()
     RayHit* rayHits;
     computeRayHits(rays, numRays, spheres, numSpheres, planes, numPlanes, &rayHits);
 
+    // Compute light shadowing
+    uint8_t* shadowMask;
+    computeShadowMask(rayHits, numRays, pointLights, numLights, spheres, numSpheres, planes, numPlanes, &shadowMask);
+
     // Compute diffuse color for ray hits
     Vector* diffuse = new Vector[numRays];
     for (int i = 0; i < numRays; ++i) {
@@ -330,7 +398,7 @@ int main()
     }
 
     for (int i = 0; i < numLights; ++i) {
-        computePointLightDiffuse(rayHits, numRays, pointLights[i], diffuse);
+        computePointLightDiffuse(rayHits, numRays, pointLights[i], diffuse, shadowMask, numLights, i);
     }
     
     unsigned char* pixels;
