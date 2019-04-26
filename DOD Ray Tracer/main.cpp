@@ -242,7 +242,7 @@ void computeRayHits(Ray* rays, int numRays, Sphere* spheres, int numSpheres, Pla
     }
 }
 
-void computePointLightDiffuse(RayHit* rayHits, int numRayHits, PointLight light, Vector* diffuseColor) {
+void computePointLightDiffuse(RayHit* rayHits, int numRayHits, PointLight* lights, int numLights, Vector* diffuseColor, Sphere* spheres, int numSpheres, Plane* planes, int numPlanes) {
     for (int rayHitIdx = 0; rayHitIdx < numRayHits; ++rayHitIdx) {
         RayHit hit = rayHits[rayHitIdx];
 
@@ -250,8 +250,38 @@ void computePointLightDiffuse(RayHit* rayHits, int numRayHits, PointLight light,
             continue;
         }
 
-        Vector lightDir = (light.pos - hit.pos).normalized();
-        diffuseColor[rayHitIdx] = diffuseColor[rayHitIdx] + light.color * max(hit.norm.dot(lightDir), 0.f);
+        for (int lightIdx = 0; lightIdx < numLights; ++lightIdx) {
+            PointLight light = lights[lightIdx];
+            Vector lightDiff = light.pos - hit.pos;
+            float lightDistanceSquared = lightDiff.sqmag();
+            Vector lightDir = lightDiff.normalized();
+
+            Ray shadowRay(hit.pos + hit.norm * 0.001f, lightDir);
+            RayHit shadowHit;
+            bool hasHit = false;
+
+            // Spheres
+            for (int sphereIdx = 0; sphereIdx < numSpheres && !hasHit; ++sphereIdx) {
+                if (rayIntersectsSphere(shadowRay, spheres[sphereIdx], shadowHit)) {
+                    if ((shadowHit.pos - hit.pos).sqmag() < lightDistanceSquared) {
+                        hasHit = true;
+                    }
+                }
+            }
+
+            // Planes
+            for (int planeIdx = 0; planeIdx < numPlanes && !hasHit; ++planeIdx) {
+                if (rayIntersectsPlane(shadowRay, planes[planeIdx], shadowHit)) {
+                    if ((shadowHit.pos - hit.pos).sqmag() < lightDistanceSquared) {
+                        hasHit = true;
+                    }
+                }
+            }
+
+            if (!hasHit) {
+                diffuseColor[rayHitIdx] = diffuseColor[rayHitIdx] + light.color * max(hit.norm.dot(lightDir), 0.f);
+            }
+        }
     }
 }
 
@@ -311,8 +341,8 @@ int main()
 
     int numLights = 2;
     PointLight* pointLights = new PointLight[numLights];
-    pointLights[0] = { { 100.f, 100.f, 50.f }, { 1.f, 1.f, 0.8f } };
-    pointLights[1] = { { -100.f, 20.f, 20.f }, { 0.8f, 0.8f, 1.f } };
+    pointLights[0] = { { 19.f, 19.f, 1.f }, { 1.f, 1.f, 0.8f } };
+    pointLights[1] = { { -19.f, 4.f, 4.f }, { 0.8f, 0.8f, 1.f } };
 
     // Create primary rays
     int numRays;
@@ -330,7 +360,7 @@ int main()
     }
 
     for (int i = 0; i < numLights; ++i) {
-        computePointLightDiffuse(rayHits, numRays, pointLights[i], diffuse);
+        computePointLightDiffuse(rayHits, numRays, pointLights, numLights, diffuse, spheres, numSpheres, planes, numPlanes);
     }
     
     unsigned char* pixels;
