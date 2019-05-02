@@ -361,8 +361,8 @@ int main()
 {
     Camera camera;
     camera.FOV = 50.f;
-    camera.width = 2000;
-    camera.height = 2000;
+    camera.width = 1000;
+    camera.height = 1000;
     camera.pos = { 0.f, 6.f, 20.f };
 
     int numSpheresHorizontal = 5;
