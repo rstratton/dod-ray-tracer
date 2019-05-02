@@ -3,6 +3,7 @@
 #include "math.h"
 #include <iostream>
 #include <vector>
+#include <limits>
 
 #pragma warning(disable:4996)
 
@@ -209,19 +210,16 @@ void computeRayHits(Ray* rays, int numRays, Sphere* spheres, int numSpheres, Pla
 
     for (int rayIdx = 0; rayIdx < numRays; ++rayIdx) {
         Ray ray = rays[rayIdx];
-        RayHit newHit, hit;
-        hit.hasHit = false;
+        RayHit newHit, closestHit;
+        float closestHitDistanceSquared = std::numeric_limits<float>::infinity();
 
         // Spheres
         for (int sphereIdx = 0; sphereIdx < numSpheres; ++sphereIdx) {
             if (rayIntersectsSphere(ray, spheres[sphereIdx], newHit)) {
-                if (hit.hasHit) {
-                    if ((hit.pos - ray.pos).sqmag() > (newHit.pos - ray.pos).sqmag()) {
-                        hit = newHit;
-                    }
-                }
-                else {
-                    hit = newHit;
+                float newHitDistanceSquared = (newHit.pos - ray.pos).sqmag();
+                if (closestHitDistanceSquared > newHitDistanceSquared) {
+                    closestHit = newHit;
+                    closestHitDistanceSquared = newHitDistanceSquared;
                 }
             }
         }
@@ -229,18 +227,16 @@ void computeRayHits(Ray* rays, int numRays, Sphere* spheres, int numSpheres, Pla
         // Planes
         for (int planeIdx = 0; planeIdx < numPlanes; ++planeIdx) {
             if (rayIntersectsPlane(ray, planes[planeIdx], newHit)) {
-                if (hit.hasHit) {
-                    if ((hit.pos - ray.pos).sqmag() > (newHit.pos - ray.pos).sqmag()) {
-                       hit = newHit;
-                    }
-                }
-                else {
-                    hit = newHit;
+                float newHitDistanceSquared = (newHit.pos - ray.pos).sqmag();
+
+                if (closestHitDistanceSquared > newHitDistanceSquared) {
+                    closestHit = newHit;
+                    closestHitDistanceSquared = newHitDistanceSquared;
                 }
             }
         }
 
-        rayHits[rayIdx] = hit;
+        rayHits[rayIdx] = closestHit;
     }
 }
 
