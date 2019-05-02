@@ -23,7 +23,7 @@ struct Vector {
     Vector(float x, float y, float z) : x(x), y(y), z(z) {};
     Vector(const Vector& v) : x(v.x), y(v.y), z(v.z) {};
 
-    Vector operator+(Vector o) {
+    Vector operator+(Vector o) const {
         return Vector(
             x + o.x,
             y + o.y,
@@ -38,7 +38,7 @@ struct Vector {
         return *this;
     }
 
-    Vector operator-(Vector o) {
+    Vector operator-(Vector o) const {
         return Vector(
             x - o.x,
             y - o.y,
@@ -46,11 +46,11 @@ struct Vector {
         );
     }
 
-    Vector operator-() {
+    Vector operator-() const {
         return Vector(-x, -y, -z);
     }
 
-    Vector operator*(float f) {
+    Vector operator*(float f) const {
         return Vector(
             f * x,
             f * y,
@@ -58,7 +58,7 @@ struct Vector {
         );
     }
 
-    Vector operator/(float f) {
+    Vector operator/(float f) const {
         return Vector(
             x / f,
             y / f,
@@ -66,19 +66,19 @@ struct Vector {
         );
     }
 
-    Vector normalized() {
+    Vector normalized() const {
         return (*this) / mag();
     }
 
-    float mag() {
+    float mag() const {
         return sqrt(sqmag());
     }
 
-    float sqmag() {
+    float sqmag() const {
         return x * x + y * y + z * z;
     }
 
-    float dot(Vector o) {
+    float dot(Vector o) const {
         return x * o.x + y * o.y + z * o.z;
     }
 };
@@ -165,7 +165,7 @@ void createPrimaryRays(Camera camera, Ray** pRays, int& numRays) {
     }
 }
 
-bool rayIntersectsSphere(Ray r, Sphere s, RayHit& h) {
+bool rayIntersectsSphere(const Ray& r, const Sphere& s, RayHit& h) {
     float a = r.dir.sqmag();
     Vector v = r.pos - s.pos;
     float b = 2 * r.dir.dot(v);
