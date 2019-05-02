@@ -23,7 +23,7 @@ struct Vector {
     Vector(float x, float y, float z) : x(x), y(y), z(z) {};
     Vector(const Vector& v) : x(v.x), y(v.y), z(v.z) {};
 
-    Vector operator+(Vector o) const {
+    Vector operator+(const Vector& o) const {
         return Vector(
             x + o.x,
             y + o.y,
@@ -38,7 +38,7 @@ struct Vector {
         return *this;
     }
 
-    Vector operator-(Vector o) const {
+    Vector operator-(const Vector& o) const {
         return Vector(
             x - o.x,
             y - o.y,
@@ -78,12 +78,12 @@ struct Vector {
         return x * x + y * y + z * z;
     }
 
-    float dot(Vector o) const {
+    float dot(const Vector& o) const {
         return x * o.x + y * o.y + z * o.z;
     }
 };
 
-Vector operator*(float f, Vector v) {
+Vector operator*(float f, const Vector& v) {
     return Vector(
         f * v.x,
         f * v.y,
