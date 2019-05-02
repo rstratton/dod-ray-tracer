@@ -185,38 +185,133 @@ bool rayIntersectsSphere(const Ray& r, const Sphere& s, RayHit& h) {
     return true;
 }
 
-//bool newRayIntersectsSphere(const Ray& r, const Sphere& s, RayHit& h) {
-//    float rayPosX = r.pos.x;
-//    float rayPosY = r.pos.y;
-//    float rayPosZ = r.pos.z;
-//
-//    float rayDirX = r.dir.x;
-//    float rayDirY = r.dir.y;
-//    float rayDirZ = r.dir.z;
-//
-//    float sphPosX = s.pos.x;
-//    float sphPosY = s.pos.y;
-//    float sphPosZ = s.pos.z;
-//
-//    float 
-//
-//    float a = r.dir.sqmag();
-//    Vector v = r.pos - s.pos;
-//    float b = 2 * r.dir.dot(v);
-//    float c = v.sqmag() - s.rad * s.rad;
-//    float disc = b * b - 4 * a*c;
-//    if (disc < 0) return false;
-//    //we only care about the minus in the plus or minus
-//    float t = (-b - sqrt(disc)) / (2 * a);
-//    h.hasHit = false;
-//    if (t < 0) return false;
-//
-//    h.pos = r.pos + r.dir * t;
-//    h.norm = (h.pos - s.pos).normalized();
-//    h.dir = r.dir;
-//    h.hasHit = true;
-//    return true;
-//}
+bool newRayIntersectsSphere(const Ray& r, const Sphere& s, RayHit& h) {
+    float rayPosX = r.pos.x;
+    float rayPosY = r.pos.y;
+    float rayPosZ = r.pos.z;
+
+    float rayDirX = r.dir.x;
+    float rayDirY = r.dir.y;
+    float rayDirZ = r.dir.z;
+
+    float sphPosX = s.pos.x;
+    float sphPosY = s.pos.y;
+    float sphPosZ = s.pos.z;
+
+    float sphRad = s.rad;
+
+    // float a = r.dir.sqmag();
+    float a = rayDirX * rayDirX + rayDirY * rayDirY + rayDirZ * rayDirZ;
+
+    // Vector v = r.pos - s.pos;
+    float vX = rayPosX - sphPosX;
+    float vY = rayPosY - sphPosY;
+    float vZ = rayPosZ - sphPosZ;
+
+    // float b = 2 * r.dir.dot(v);
+    float b = 2 * (rayDirX * vX + rayDirY * vY + rayDirZ * vZ);
+
+    // float c = v.sqmag() - s.rad * s.rad;
+    float c = (vX * vX + vY * vY + vZ * vZ) - sphRad * sphRad;
+
+    float disc = b * b - 4 * a*c;
+
+    if (disc < 0) return false;
+    //we only care about the minus in the plus or minus
+    float t = (-b - sqrt(disc)) / (2 * a);
+    h.hasHit = false;
+    if (t < 0) return false;
+
+    h.pos = r.pos + r.dir * t;
+    h.norm = (h.pos - s.pos).normalized();
+    h.dir = r.dir;
+    h.hasHit = true;
+    return true;
+}
+
+struct AvxRaySphereIntersectionIn {
+    float posX[8];
+    float posY[8];
+    float posZ[8];
+
+    float dirX[8];
+    float dirY[8];
+    float dirZ[8];
+};
+
+struct AvxRaySphereIntersectionOut {
+    float posX[8];
+    float posY[8];
+    float posZ[8];
+
+    float dirX[8];
+    float dirY[8];
+    float dirZ[8];
+
+    float normX[8];
+    float normY[8];
+    float normZ[8];
+
+    uint8_t hasHitFlags;
+};
+
+void buildAvxRaySphereIntersectionIn(Ray* rays, AvxRaySphereIntersectionIn& result) {
+    for (int i = 0; i < 8; ++i) {
+        result.posX[i] = rays[i].pos.x;
+        result.posY[i] = rays[i].pos.y;
+        result.posZ[i] = rays[i].pos.z;
+
+        result.dirX[i] = rays[i].dir.x;
+        result.dirY[i] = rays[i].dir.y;
+        result.dirZ[i] = rays[i].dir.z;
+    }
+}
+
+void writeAvxRaySphereIntersectionOut(RayHit* rayHits, 
+
+void avxRaySphereIntersection(const AvxRaySphereIntersectionIn& in, const Sphere& s, AvxRaySphereIntersectionOut& out) {
+}
+
+// Get value `t` such that `r.pos + t * r.dir == intersection point.
+// If t < 0, then there is no intersection.
+float getRaySphereIntersectionParam(const Ray& r, const Sphere& s) {
+    float rayPosX = r.pos.x;
+    float rayPosY = r.pos.y;
+    float rayPosZ = r.pos.z;
+
+    float rayDirX = r.dir.x;
+    float rayDirY = r.dir.y;
+    float rayDirZ = r.dir.z;
+
+    float sphPosX = s.pos.x;
+    float sphPosY = s.pos.y;
+    float sphPosZ = s.pos.z;
+
+    float sphRad = s.rad;
+
+    // float a = r.dir.sqmag();
+    float a = rayDirX * rayDirX + rayDirY * rayDirY + rayDirZ * rayDirZ;
+
+    // Vector v = r.pos - s.pos;
+    float vX = rayPosX - sphPosX;
+    float vY = rayPosY - sphPosY;
+    float vZ = rayPosZ - sphPosZ;
+
+    // float b = 2 * r.dir.dot(v);
+    float b = 2 * (rayDirX * vX + rayDirY * vY + rayDirZ * vZ);
+
+    // float c = v.sqmag() - s.rad * s.rad;
+    float c = (vX * vX + vY * vY + vZ * vZ) - sphRad * sphRad;
+
+    float disc = b * b - 4 * a*c;
+
+    if (disc < 0) {
+        return -1.f;
+    }
+    else {
+        return (-b - sqrt(disc)) / (2 * a);
+    }
+}
 
 bool rayIntersectsPlane(Ray r, Plane p, RayHit& h) {
     // Taken from graphicscodex.com
@@ -248,7 +343,7 @@ void computeRayHits(Ray* rays, int numRays, Sphere* spheres, int numSpheres, Pla
 
         // Spheres
         for (int sphereIdx = 0; sphereIdx < numSpheres; ++sphereIdx) {
-            if (rayIntersectsSphere(ray, spheres[sphereIdx], newHit)) {
+            if (newRayIntersectsSphere(ray, spheres[sphereIdx], newHit)) {
                 float newHitDistanceSquared = (newHit.pos - ray.pos).sqmag();
                 if (closestHitDistanceSquared > newHitDistanceSquared) {
                     closestHit = newHit;
@@ -331,7 +426,7 @@ void computePointLightDiffuse(RayHit* rayHits, int numRayHits, PointLight* light
 
             // Spheres
             for (int sphereIdx = 0; sphereIdx < numSpheres && !hasHit; ++sphereIdx) {
-                if (rayIntersectsSphere(shadowRay, spheres[sphereIdx], shadowHit)) {
+                if (newRayIntersectsSphere(shadowRay, spheres[sphereIdx], shadowHit)) {
                     if ((shadowHit.pos - hit.pos).sqmag() < lightDistanceSquared) {
                         hasHit = true;
                     }
@@ -464,6 +559,7 @@ int main()
             reflectableRayHits[j] = rayHits[(*reflectableRayHitIndices)[j]];
         }
 
+        delete reflectableRayHitIndices;
         delete[] rayHits;
 
         Ray* reflectionRays;
