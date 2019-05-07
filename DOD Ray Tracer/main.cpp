@@ -108,7 +108,7 @@ struct RayHit {
 };
 
 struct Camera {
-    float FOV;
+    float verticalFov;
     int width;
     int height;
     Vector pos;
@@ -145,14 +145,14 @@ void createPrimaryRays(Camera camera, Ray** pRays, int& numRays) {
     *pRays = rays;
     numRays = pixelCount;
 
-    float w_prime = 2 * tanf(degToRad(camera.FOV / 2));
-    float h_prime = (w_prime * camera.height) / camera.width;
+    float verticalImagePlaneSize = 2 * tanf(degToRad(camera.verticalFov / 2));
+    float horizontalImagePlaneSize = (verticalImagePlaneSize / camera.height) * camera.width;
 
-    float w_start = -w_prime / 2;
-    float h_start = h_prime / 2;
+    float x_0 = -horizontalImagePlaneSize / 2;
+    float y_0 = verticalImagePlaneSize / 2;
 
-    float w_step = w_prime / camera.width;
-    float h_step = -h_prime / camera.height;
+    float dx = horizontalImagePlaneSize / camera.width;
+    float dy = -verticalImagePlaneSize / camera.height;
 
     for (int i = 0; i < camera.height; ++i) {
         int rowOffset = i * camera.width;
@@ -161,7 +161,7 @@ void createPrimaryRays(Camera camera, Ray** pRays, int& numRays) {
             // NOTE: Primary rays all share the initial camera position.  Maybe primary rays should be
             // a different struct since they'll all share the same position.
             rays[rayIdx].pos = camera.pos;
-            rays[rayIdx].dir = Vector(w_start + j * w_step, h_start + i * h_step, -1.f).normalized();
+            rays[rayIdx].dir = Vector(x_0 + j * dx, y_0 + i * dy, -1.f).normalized();
         }
     }
 }
@@ -356,7 +356,7 @@ void writePPM(unsigned char *buf, int width, int height, const char *fn) {
 int main()
 {
     Camera camera;
-    camera.FOV = 50.f;
+    camera.verticalFov = 50.f;
     camera.width = 1000;
     camera.height = 1000;
     camera.pos = { 0.f, 6.f, 20.f };
