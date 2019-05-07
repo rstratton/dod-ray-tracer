@@ -185,39 +185,6 @@ bool rayIntersectsSphere(const Ray& r, const Sphere& s, RayHit& h) {
     return true;
 }
 
-//bool newRayIntersectsSphere(const Ray& r, const Sphere& s, RayHit& h) {
-//    float rayPosX = r.pos.x;
-//    float rayPosY = r.pos.y;
-//    float rayPosZ = r.pos.z;
-//
-//    float rayDirX = r.dir.x;
-//    float rayDirY = r.dir.y;
-//    float rayDirZ = r.dir.z;
-//
-//    float sphPosX = s.pos.x;
-//    float sphPosY = s.pos.y;
-//    float sphPosZ = s.pos.z;
-//
-//    float 
-//
-//    float a = r.dir.sqmag();
-//    Vector v = r.pos - s.pos;
-//    float b = 2 * r.dir.dot(v);
-//    float c = v.sqmag() - s.rad * s.rad;
-//    float disc = b * b - 4 * a*c;
-//    if (disc < 0) return false;
-//    //we only care about the minus in the plus or minus
-//    float t = (-b - sqrt(disc)) / (2 * a);
-//    h.hasHit = false;
-//    if (t < 0) return false;
-//
-//    h.pos = r.pos + r.dir * t;
-//    h.norm = (h.pos - s.pos).normalized();
-//    h.dir = r.dir;
-//    h.hasHit = true;
-//    return true;
-//}
-
 bool rayIntersectsPlane(Ray r, Plane p, RayHit& h) {
     // Taken from graphicscodex.com
     // t = ((P - C).dot(n)) / (w.dot(n))
