@@ -142,12 +142,12 @@ float degToRad(float deg) {
     return deg * M_PI / 180.f;
 }
 
-void createPrimaryRaysAVX(Camera camera, RayAVX** pRays, int& numRays) {
-    int pixelCount = camera.width * camera.height;
-    int rayCount = ceil(pixelCount / 8.f);
-    RayAVX* rays = new RayAVX[rayCount];
+void createPrimaryRaysAVX(Camera camera, RayAVX** pRays, int& numRays, int& numRayStructs) {
+    int numPixels = camera.width * camera.height;
+    numRayStructs = ceil(numPixels / 8.f);
+    RayAVX* rays = new RayAVX[numRayStructs];
     *pRays = rays;
-    numRays = rayCount;
+    numRays = numPixels;
 
     float verticalImagePlaneSize = 2 * tanf(degToRad(camera.verticalFov / 2));
     float horizontalImagePlaneSize = (verticalImagePlaneSize / camera.height) * camera.width;
@@ -158,27 +158,38 @@ void createPrimaryRaysAVX(Camera camera, RayAVX** pRays, int& numRays) {
     float dx = horizontalImagePlaneSize / camera.width;
     float dy = -verticalImagePlaneSize / camera.height;
 
-    for (int i = 0; i < pixelCount; i += 8) {
-        int rayIdx = i / 8;
+    for (int i = 0; i < numPixels; i += 8) {
+        int rayStructIdx = i / 8;
 
         for (int j = 0; j < 8; ++j) {
+            // TODO: Vectorize this code?
             float x = x_0 + ((i + j) % camera.width) * dx;
             float y = y_0 + ((i + j) / camera.width) * dy;
 
             Vector v = Vector(x, y, -1.f).normalized();
 
-            rays[rayIdx].dir.x[j] = v.x;
-            rays[rayIdx].dir.y[j] = v.y;
-            rays[rayIdx].dir.z[j] = v.z;
+            rays[rayStructIdx].dir.x[j] = v.x;
+            rays[rayStructIdx].dir.y[j] = v.y;
+            rays[rayStructIdx].dir.z[j] = v.z;
 
-            rays[rayIdx].pos.x[j] = camera.pos.x;
-            rays[rayIdx].pos.y[j] = camera.pos.y;
-            rays[rayIdx].pos.z[j] = camera.pos.z;
+            rays[rayStructIdx].pos.x[j] = camera.pos.x;
+            rays[rayStructIdx].pos.y[j] = camera.pos.y;
+            rays[rayStructIdx].pos.z[j] = camera.pos.z;
         }
     }
 }
 
-void computeRayHits(RayAVX* rays, int numRays, Sphere* spheres, int numSpheres, Plane* planes, int numPlanes, RayHitAVX** pRayHits) {
+void computeRayHits(RayAVX* rays, int numRays, int numRayStructs, Sphere* spheres, int numSpheres, Plane* planes, int numPlanes, RayHitAVX** pRayHits) {
+    RayHitAVX* rayHits = new RayHitAVX[numRayStructs];
+    *pRayHits = rayHits;
+
+    for (int rayStructIdx = 0; rayStructIdx < numRayStructs; ++rayStructIdx) {
+
+    }
+
+
+
+
     // We will have at most `numRays` hits
     RayHit* rayHits = new RayHit[numRays];
     *pRayHits = rayHits;
