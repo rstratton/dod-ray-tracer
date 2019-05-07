@@ -4,6 +4,7 @@
 #include <iostream>
 #include <vector>
 #include <limits>
+#include <immintrin.h>
 
 #pragma warning(disable:4996)
 
@@ -167,8 +168,11 @@ void createPrimaryRays(Camera camera, Ray** pRays, int& numRays) {
 }
 
 bool rayIntersectsSphere(const Ray& r, const Sphere& s, RayHit& h) {
+    // dir x,y,z
     float a = r.dir.sqmag();
+    // pos x,y,z
     Vector v = r.pos - s.pos;
+    // dir x,y,z
     float b = 2 * r.dir.dot(v);
     float c = v.sqmag() - s.rad * s.rad;
     float disc = b * b - 4 * a*c;
@@ -178,6 +182,8 @@ bool rayIntersectsSphere(const Ray& r, const Sphere& s, RayHit& h) {
     h.hasHit = false;
     if (t < 0) return false;
 
+    // dir x,y,z
+    // pos x,y,z
     h.pos = r.pos + r.dir * t;
     h.norm = (h.pos - s.pos).normalized();
     h.dir = r.dir;
@@ -185,38 +191,112 @@ bool rayIntersectsSphere(const Ray& r, const Sphere& s, RayHit& h) {
     return true;
 }
 
-//bool newRayIntersectsSphere(const Ray& r, const Sphere& s, RayHit& h) {
-//    float rayPosX = r.pos.x;
-//    float rayPosY = r.pos.y;
-//    float rayPosZ = r.pos.z;
-//
-//    float rayDirX = r.dir.x;
-//    float rayDirY = r.dir.y;
-//    float rayDirZ = r.dir.z;
-//
-//    float sphPosX = s.pos.x;
-//    float sphPosY = s.pos.y;
-//    float sphPosZ = s.pos.z;
-//
-//    float 
-//
-//    float a = r.dir.sqmag();
-//    Vector v = r.pos - s.pos;
-//    float b = 2 * r.dir.dot(v);
-//    float c = v.sqmag() - s.rad * s.rad;
-//    float disc = b * b - 4 * a*c;
-//    if (disc < 0) return false;
-//    //we only care about the minus in the plus or minus
-//    float t = (-b - sqrt(disc)) / (2 * a);
-//    h.hasHit = false;
-//    if (t < 0) return false;
-//
-//    h.pos = r.pos + r.dir * t;
-//    h.norm = (h.pos - s.pos).normalized();
-//    h.dir = r.dir;
-//    h.hasHit = true;
-//    return true;
-//}
+struct VectorAVX {
+    __m256 x;
+    __m256 y;
+    __m256 z;
+
+    VectorAVX operator+(const VectorAVX& o) const {
+        VectorAVX result;
+        result.x = _mm256_add_ps(x, o.x);
+        result.y = _mm256_add_ps(y, o.y);
+        result.z = _mm256_add_ps(z, o.z);
+        return result;
+    }
+
+    VectorAVX operator-(const VectorAVX& o) const {
+        VectorAVX result;
+        result.x = _mm256_sub_ps(x, o.x);
+        result.y = _mm256_sub_ps(y, o.y);
+        result.z = _mm256_sub_ps(z, o.z);
+        return result;
+    }
+
+    VectorAVX operator-() const {
+        VectorAVX result;
+        __m256 negOne = _mm256_set1_ps(-1.f);
+        result.x = _mm256_mul_ps(x, negOne);
+        result.y = _mm256_mul_ps(y, negOne);
+        result.z = _mm256_mul_ps(z, negOne);
+        return result;
+    }
+
+    VectorAVX operator*(float f) const {
+        VectorAVX result;
+        __m256 multiplier = _mm256_set1_ps(f);
+        result.x = _mm256_mul_ps(x, multiplier);
+        result.y = _mm256_mul_ps(y, multiplier);
+        result.z = _mm256_mul_ps(z, multiplier);
+        return result;
+    }
+
+    VectorAVX operator/(float f) const {
+        VectorAVX result;
+        __m256 divisor = _mm256_set1_ps(f);
+        result.x = _mm256_div_ps(x, divisor);
+        result.y = _mm256_div_ps(y, divisor);
+        result.z = _mm256_div_ps(z, divisor);
+        return result;
+    }
+
+    VectorAVX normalized() const {
+        VectorAVX result;
+        __m256 multiplier = _mm256_rsqrt_ps(sqmag());
+        result.x = _mm256_mul_ps(x, multiplier);
+        result.y = _mm256_mul_ps(y, multiplier);
+        result.z = _mm256_mul_ps(z, multiplier);
+        return result;
+    }
+
+    __m256 mag() const {
+        return _mm256_sqrt_ps(sqmag());
+    }
+
+    __m256 sqmag() const {
+        __m256 xx = _mm256_mul_ps(x, x);
+        __m256 yy = _mm256_mul_ps(y, y);
+        __m256 zz = _mm256_mul_ps(z, z);
+        __m256 xx_yy = _mm256_add_ps(xx, yy);
+        return _mm256_add_ps(xx_yy, zz);
+    }
+
+    __m256 dot(const VectorAVX& o) const {
+        __m256 xx = _mm256_mul_ps(x, o.x);
+        __m256 yy = _mm256_mul_ps(y, o.y);
+        __m256 zz = _mm256_mul_ps(z, o.z);
+        __m256 xx_yy = _mm256_add_ps(xx, yy);
+        return _mm256_add_ps(xx_yy, zz);
+    }
+
+    void blend(const VectorAVX& o, uint8_t mask) {
+        x = _mm256_blend_ps(x, o.x, mask);
+        y = _mm256_blend_ps(y, o.y, mask);
+        z = _mm256_blend_ps(z, o.z, mask);
+    }
+};
+
+struct RayAVX {
+    VectorAVX pos;
+    VectorAVX dir;
+};
+
+struct RayHitAVX {
+    VectorAVX pos;
+    VectorAVX norm;
+    VectorAVX dir;
+    uint8_t hasHit;
+
+    void blend(const RayHitAVX o, uint8_t mask) {
+        pos.blend(o.pos, mask);
+        norm.blend(o.norm, mask);
+        dir.blend(o.dir, mask);
+        hasHit = (hasHit & ~mask) | (o.hasHit & mask);
+    }
+};
+
+void raysIntersectsSphereAVX(const RayAVX& rays, const Sphere& s, RayHitAVX& rayHits) {
+
+}
 
 bool rayIntersectsPlane(Ray r, Plane p, RayHit& h) {
     // Taken from graphicscodex.com
@@ -236,12 +316,64 @@ bool rayIntersectsPlane(Ray r, Plane p, RayHit& h) {
     return true;
 }
 
+void convertRaysToAVX(Ray* rays, RayAVX& avxRays) {
+    // Load position x,y,z
+    __m256i gatherPosXIndices = _mm256_set_epi32(0, 6, 12, 18, 24, 30, 36, 42);
+    avxRays.pos.x = _mm256_i32gather_ps((float*)rays, gatherPosXIndices, 1);
+
+    __m256i gatherPosYIndices = _mm256_set_epi32(1, 7, 13, 19, 25, 31, 37, 43);
+    avxRays.pos.y = _mm256_i32gather_ps((float*)rays, gatherPosYIndices, 1);
+
+    __m256i gatherPosZIndices = _mm256_set_epi32(2, 8, 14, 20, 26, 32, 38, 44);
+    avxRays.pos.z = _mm256_i32gather_ps((float*)rays, gatherPosZIndices, 1);
+
+    // Load direction x,y,z
+    __m256i gatherDirXIndices = _mm256_set_epi32(3, 9, 15, 21, 27, 33, 39, 45);
+    avxRays.dir.x = _mm256_i32gather_ps((float*)rays, gatherDirXIndices, 1);
+
+    __m256i gatherDirYIndices = _mm256_set_epi32(4, 10, 16, 22, 28, 34, 40, 46);
+    avxRays.dir.y = _mm256_i32gather_ps((float*)rays, gatherDirYIndices, 1);
+
+    __m256i gatherDirZIndices = _mm256_set_epi32(5, 11, 17, 23, 29, 35, 41, 47);
+    avxRays.dir.z = _mm256_i32gather_ps((float*)rays, gatherDirZIndices, 1);
+}
+
+void convertAvxRayHitsToRayHits(RayHit* rayHits, const RayHitAVX& avxRayHits) {
+    __m256i scatterPosXIndices = _mm256_set_epi32()
+}
+
 void computeRayHits(Ray* rays, int numRays, Sphere* spheres, int numSpheres, Plane* planes, int numPlanes, RayHit** pRayHits) {
     // We will have at most `numRays` hits
     RayHit* rayHits = new RayHit[numRays];
     *pRayHits = rayHits;
+    const __m256 infinity = _mm256_set1_ps(std::numeric_limits<float>::infinity());
 
-    for (int rayIdx = 0; rayIdx < numRays; ++rayIdx) {
+    for (int batchStart = 0; batchStart < numRays - 8; batchStart += 8) {
+        RayAVX rayBatch;
+        convertRaysToAVX(rays + batchStart, rayBatch);
+        RayHitAVX newHits;
+        RayHitAVX closestHits;
+        closestHits.hasHit = 0;
+        __m256 closestHitDistanceSquared = infinity;
+
+        for (int sphereIdx = 0; sphereIdx < numSpheres; ++sphereIdx) {
+            raysIntersectsSphereAVX(rayBatch, spheres[sphereIdx], newHits);
+            __m256 newHitDistanceSquared = _mm256_blend_ps(infinity, (newHits.pos - rayBatch.pos).sqmag(), newHits.hasHit);
+            __m256 newHitDistanceLessThanClosest = _mm256_cmp_ps(newHitDistanceSquared, closestHitDistanceSquared, _CMP_LT_OS);
+            uint8_t mask = _mm256_movemask_ps(newHitDistanceLessThanClosest);
+            closestHitDistanceSquared = _mm256_blend_ps(closestHitDistanceSquared, newHitDistanceSquared, mask);
+            closestHits.blend(newHits, mask);
+        }
+
+        convertAvxRayHitsToRayHits(rayHits + batchStart, closestHits);
+    }
+
+    // If the number of rays is not divisible by 8, we need to deal with the remaining
+    // rays which we didn't process in the vectorized loop.
+    // TODO: Instead of doing this, we could over-allocate our rays array to a multiple of 8
+    // so that we can do all of our computations in the vectorized loop and just throw away
+    // the extra results.
+    for (int rayIdx = numRays - (numRays % 8); rayIdx < numRays; ++rayIdx) {
         Ray ray = rays[rayIdx];
         RayHit newHit, closestHit;
         float closestHitDistanceSquared = std::numeric_limits<float>::infinity();
