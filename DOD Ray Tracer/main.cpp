@@ -92,21 +92,6 @@ Vector operator*(float f, const Vector& v) {
     );
 }
 
-struct Ray {
-    Vector pos;
-    Vector dir;
-
-    Ray() {};
-    Ray(const Vector& pos, const Vector& dir) : pos(pos), dir(dir) {};
-};
-
-struct RayHit {
-    Vector pos;
-    Vector norm;
-    Vector dir;
-    uint8_t hasHit : 1;
-};
-
 struct Camera {
     float verticalFov;
     int width;
@@ -135,15 +120,34 @@ struct PointLight {
     Vector color;
 };
 
+struct VectorAVX {
+    float x[8];
+    float y[8];
+    float z[8];
+};
+
+struct RayAVX {
+    VectorAVX pos;
+    VectorAVX dir;
+};
+
+struct RayHitAVX {
+    VectorAVX pos;
+    VectorAVX norm;
+    VectorAVX dir;
+    bool hasHit[8];
+};
+
 float degToRad(float deg) {
     return deg * M_PI / 180.f;
 }
 
-void createPrimaryRays(Camera camera, Ray** pRays, int& numRays) {
+void createPrimaryRaysAVX(Camera camera, RayAVX** pRays, int& numRays) {
     int pixelCount = camera.width * camera.height;
-    Ray* rays = new Ray[pixelCount];
+    int rayCount = ceil(pixelCount / 8.f);
+    RayAVX* rays = new RayAVX[rayCount];
     *pRays = rays;
-    numRays = pixelCount;
+    numRays = rayCount;
 
     float verticalImagePlaneSize = 2 * tanf(degToRad(camera.verticalFov / 2));
     float horizontalImagePlaneSize = (verticalImagePlaneSize / camera.height) * camera.width;
@@ -154,56 +158,27 @@ void createPrimaryRays(Camera camera, Ray** pRays, int& numRays) {
     float dx = horizontalImagePlaneSize / camera.width;
     float dy = -verticalImagePlaneSize / camera.height;
 
-    for (int i = 0; i < camera.height; ++i) {
-        int rowOffset = i * camera.width;
-        for (int j = 0; j < camera.width; ++j) {
-            int rayIdx = rowOffset + j;
-            // NOTE: Primary rays all share the initial camera position.  Maybe primary rays should be
-            // a different struct since they'll all share the same position.
-            rays[rayIdx].pos = camera.pos;
-            rays[rayIdx].dir = Vector(x_0 + j * dx, y_0 + i * dy, -1.f).normalized();
+    for (int i = 0; i < pixelCount; i += 8) {
+        int rayIdx = i / 8;
+
+        for (int j = 0; j < 8; ++j) {
+            float x = x_0 + ((i + j) % camera.width) * dx;
+            float y = y_0 + ((i + j) / camera.width) * dy;
+
+            Vector v = Vector(x, y, -1.f).normalized();
+
+            rays[rayIdx].dir.x[j] = v.x;
+            rays[rayIdx].dir.y[j] = v.y;
+            rays[rayIdx].dir.z[j] = v.z;
+
+            rays[rayIdx].pos.x[j] = camera.pos.x;
+            rays[rayIdx].pos.y[j] = camera.pos.y;
+            rays[rayIdx].pos.z[j] = camera.pos.z;
         }
     }
 }
 
-bool rayIntersectsSphere(const Ray& r, const Sphere& s, RayHit& h) {
-    float a = r.dir.sqmag();
-    Vector v = r.pos - s.pos;
-    float b = 2 * r.dir.dot(v);
-    float c = v.sqmag() - s.rad * s.rad;
-    float disc = b * b - 4 * a*c;
-    if (disc < 0) return false;
-    //we only care about the minus in the plus or minus
-    float t = (-b - sqrt(disc)) / (2 * a);
-    h.hasHit = false;
-    if (t < 0) return false;
-
-    h.pos = r.pos + r.dir * t;
-    h.norm = (h.pos - s.pos).normalized();
-    h.dir = r.dir;
-    h.hasHit = true;
-    return true;
-}
-
-bool rayIntersectsPlane(Ray r, Plane p, RayHit& h) {
-    // Taken from graphicscodex.com
-    // t = ((P - C).dot(n)) / (w.dot(n))
-    // Ray equation: X(t) = P + t*w
-    h.hasHit = false;
-
-    float numerator = (r.pos - p.pos).dot(p.norm);
-    float denominator = r.dir.dot(p.norm);
-    if (denominator >= 0) return false;
-    float t = -numerator / denominator;
-    if (t < 0) return false;
-    h.norm = p.norm;
-    h.pos = r.pos + t * r.dir;
-    h.dir = r.dir;
-    h.hasHit = true;
-    return true;
-}
-
-void computeRayHits(Ray* rays, int numRays, Sphere* spheres, int numSpheres, Plane* planes, int numPlanes, RayHit** pRayHits) {
+void computeRayHits(RayAVX* rays, int numRays, Sphere* spheres, int numSpheres, Plane* planes, int numPlanes, RayHitAVX** pRayHits) {
     // We will have at most `numRays` hits
     RayHit* rayHits = new RayHit[numRays];
     *pRayHits = rayHits;
@@ -240,86 +215,6 @@ void computeRayHits(Ray* rays, int numRays, Sphere* spheres, int numSpheres, Pla
     }
 }
 
-void selectReflectableIntersections(RayHit* rayHits, int numRayHits, std::vector<int>** pReflectableRayHits, std::vector<int>* primaryRayIndices, std::vector<int>** pNewPrimaryRayIndices, int& numReflectableRayHits) {
-    std::vector<int>* reflectableRayHits = new std::vector<int>();
-    *pReflectableRayHits = reflectableRayHits;
-    std::vector<int>* newPrimaryRayIndices = new std::vector<int>();
-    *pNewPrimaryRayIndices = newPrimaryRayIndices;
-
-    reflectableRayHits->reserve(numRayHits);
-    newPrimaryRayIndices->reserve(numRayHits);
-
-    int numReflectable = 0;
-
-    for (int i = 0; i < numRayHits; ++i) {
-        if (rayHits[i].hasHit) {
-            reflectableRayHits->push_back(i);
-            newPrimaryRayIndices->push_back((*primaryRayIndices)[i]);
-            ++numReflectable;
-        }
-    }
-
-    numReflectableRayHits = numReflectable;
-    reflectableRayHits->shrink_to_fit();
-    newPrimaryRayIndices->shrink_to_fit();
-}
-
-void computeReflectionRays(RayHit* rayHits, int numRayHits, Ray** pReflectionRays) {
-    Ray* reflectionRays = new Ray[numRayHits];
-    *pReflectionRays = reflectionRays;
-
-    for (int i = 0; i < numRayHits; ++i) {
-        RayHit hit = rayHits[i];
-
-        Vector v = -hit.dir.normalized();
-        Vector n = hit.norm.normalized();
-        Vector direction = ((n * (2 * v.dot(n))) - v).normalized();
-        reflectionRays[i] = Ray(hit.pos + 0.001f * direction, direction);
-    }
-}
-
-void computePointLightDiffuse(RayHit* rayHits, int numRayHits, PointLight* lights, int numLights, Vector* diffuseColor, Sphere* spheres, int numSpheres, Plane* planes, int numPlanes) {
-    for (int rayHitIdx = 0; rayHitIdx < numRayHits; ++rayHitIdx) {
-        RayHit hit = rayHits[rayHitIdx];
-
-        if (!hit.hasHit) {
-            continue;
-        }
-
-        for (int lightIdx = 0; lightIdx < numLights; ++lightIdx) {
-            PointLight light = lights[lightIdx];
-            Vector lightDiff = light.pos - hit.pos;
-            float lightDistanceSquared = lightDiff.sqmag();
-            Vector lightDir = lightDiff.normalized();
-
-            Ray shadowRay(hit.pos + hit.norm * 0.001f, lightDir);
-            RayHit shadowHit;
-            bool hasHit = false;
-
-            // Spheres
-            for (int sphereIdx = 0; sphereIdx < numSpheres && !hasHit; ++sphereIdx) {
-                if (rayIntersectsSphere(shadowRay, spheres[sphereIdx], shadowHit)) {
-                    if ((shadowHit.pos - hit.pos).sqmag() < lightDistanceSquared) {
-                        hasHit = true;
-                    }
-                }
-            }
-
-            // Planes
-            for (int planeIdx = 0; planeIdx < numPlanes && !hasHit; ++planeIdx) {
-                if (rayIntersectsPlane(shadowRay, planes[planeIdx], shadowHit)) {
-                    if ((shadowHit.pos - hit.pos).sqmag() < lightDistanceSquared) {
-                        hasHit = true;
-                    }
-                }
-            }
-
-            if (!hasHit) {
-                diffuseColor[rayHitIdx] = diffuseColor[rayHitIdx] + light.color * max(hit.norm.dot(lightDir), 0.f);
-            }
-        }
-    }
-}
 
 void convertDiffuseToPixels(Vector* diffuse, unsigned char **pPixels, int numPixels) {
     unsigned char *pixels = new unsigned char[3 * numPixels];
@@ -352,9 +247,9 @@ void writePPM(unsigned char *buf, int width, int height, const char *fn) {
     printf("Wrote image file %s\n", fn);
 }
 
-
 int main()
 {
+    // Init scene
     Camera camera;
     camera.verticalFov = 50.f;
     camera.width = 1000;
@@ -388,7 +283,7 @@ int main()
     PointLight* pointLights = new PointLight[numLights];
     pointLights[0] = { { 19.f, 19.f, 1.f }, { 0.07f, 0.07f, 0.05f } };
     pointLights[1] = { { -19.f, 4.f, 4.f }, { 0.05f, 0.05f, 0.07f } };
-
+    
     // Create primary rays
     int numRays;
     Ray* rays;
