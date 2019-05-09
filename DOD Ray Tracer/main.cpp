@@ -4,6 +4,8 @@
 #include <iostream>
 #include <vector>
 #include <limits>
+#include <immintrin.h>
+#include <intrin.h>
 
 #pragma warning(disable:4996)
 
@@ -92,6 +94,108 @@ Vector operator*(float f, const Vector& v) {
     );
 }
 
+struct VectorAVX {
+    __m256 x;
+    __m256 y;
+    __m256 z;
+
+    VectorAVX() {};
+
+    VectorAVX(const Vector& v) {
+        x = _mm256_set1_ps(v.x);
+        y = _mm256_set1_ps(v.y);
+        z = _mm256_set1_ps(v.z);
+    }
+
+    VectorAVX(__m256 x, __m256 y, __m256 z) : x(x), y(y), z(z) {}
+
+    VectorAVX operator+(const VectorAVX& o) const {
+        return VectorAVX(
+            _mm256_add_ps(x, o.x),
+            _mm256_add_ps(y, o.y),
+            _mm256_add_ps(z, o.z)
+        );
+    }
+
+    VectorAVX operator-(const VectorAVX& o) const {
+        return VectorAVX(
+            _mm256_sub_ps(x, o.x),
+            _mm256_sub_ps(y, o.y),
+            _mm256_sub_ps(z, o.z)
+        );
+    }
+
+    VectorAVX operator-() const {
+        __m256 negOne = _mm256_set1_ps(-1.f);
+        return VectorAVX(
+            _mm256_mul_ps(x, negOne),
+            _mm256_mul_ps(y, negOne),
+            _mm256_mul_ps(z, negOne)
+        );
+    }
+
+    VectorAVX operator*(float f) const {
+        __m256 multiplier = _mm256_set1_ps(f);
+        return VectorAVX(
+            _mm256_mul_ps(x, multiplier),
+            _mm256_mul_ps(y, multiplier),
+            _mm256_mul_ps(z, multiplier)
+        );
+    }
+
+    VectorAVX operator*(__m256 f) const {
+        return VectorAVX(
+            _mm256_mul_ps(x, f),
+            _mm256_mul_ps(y, f),
+            _mm256_mul_ps(z, f)
+        );
+    }
+
+    VectorAVX operator/(float f) const {
+        __m256 divisor = _mm256_set1_ps(f);
+        return VectorAVX(
+            _mm256_div_ps(x, divisor),
+            _mm256_div_ps(y, divisor),
+            _mm256_div_ps(z, divisor)
+        );
+    }
+
+    VectorAVX normalized() const {
+        __m256 divisor = _mm256_sqrt_ps(sqmag());
+        return VectorAVX(
+            _mm256_div_ps(x, divisor),
+            _mm256_div_ps(y, divisor),
+            _mm256_div_ps(z, divisor)
+        );
+    }
+
+    __m256 mag() const {
+        return _mm256_sqrt_ps(sqmag());
+    }
+
+    __m256 sqmag() const {
+        __m256 xx = _mm256_mul_ps(x, x);
+        __m256 yy = _mm256_mul_ps(y, y);
+        __m256 zz = _mm256_mul_ps(z, z);
+        __m256 xx_yy = _mm256_add_ps(xx, yy);
+        return _mm256_add_ps(xx_yy, zz);
+    }
+
+    __m256 dot(const VectorAVX& o) const {
+        __m256 xx = _mm256_mul_ps(x, o.x);
+        __m256 yy = _mm256_mul_ps(y, o.y);
+        __m256 zz = _mm256_mul_ps(z, o.z);
+        __m256 xx_yy = _mm256_add_ps(xx, yy);
+        return _mm256_add_ps(xx_yy, zz);
+    }
+
+    void blend(VectorAVX& o, __m256 mask) {
+        this->x = _mm256_blendv_ps(x, o.x, mask);
+        this->y = _mm256_blendv_ps(y, o.y, mask);
+        this->z = _mm256_blendv_ps(z, o.z, mask);
+    }
+};
+
 struct Camera {
     float verticalFov;
     int width;
@@ -120,129 +224,188 @@ struct PointLight {
     Vector color;
 };
 
-struct VectorAVX {
-    float x[8];
-    float y[8];
-    float z[8];
-};
-
 struct RayAVX {
     VectorAVX pos;
     VectorAVX dir;
+
+    RayAVX() {};
+    RayAVX(const VectorAVX& pos, const VectorAVX& dir) : pos(pos), dir(dir) {};
 };
 
 struct RayHitAVX {
     VectorAVX pos;
     VectorAVX norm;
     VectorAVX dir;
-    bool hasHit[8];
+
+    void blend(RayHitAVX o, __m256 mask) {
+        pos.blend(o.pos, mask);
+        norm.blend(o.norm, mask);
+        dir.blend(o.dir, mask);
+    }
 };
 
 float degToRad(float deg) {
     return deg * M_PI / 180.f;
 }
 
-void createPrimaryRaysAVX(Camera camera, RayAVX** pRays, int& numRays, int& numRayStructs) {
-    int numPixels = camera.width * camera.height;
-    numRayStructs = ceil(numPixels / 8.f);
-    RayAVX* rays = new RayAVX[numRayStructs];
+void createPrimaryRaysAVX(Camera camera, RayAVX** pRays, int& numPixels, int& numRays) {
+    numPixels = camera.width * camera.height;
+    numRays = ceil(numPixels / 8.f);
+    RayAVX* rays = (RayAVX*)_aligned_malloc(sizeof(RayAVX) * numRays, 32);
     *pRays = rays;
-    numRays = numPixels;
 
     float verticalImagePlaneSize = 2 * tanf(degToRad(camera.verticalFov / 2));
     float horizontalImagePlaneSize = (verticalImagePlaneSize / camera.height) * camera.width;
 
-    float x_0 = -horizontalImagePlaneSize / 2;
-    float y_0 = verticalImagePlaneSize / 2;
+    __m256 x_0 = _mm256_set1_ps(-horizontalImagePlaneSize / 2);
+    __m256 y_0 = _mm256_set1_ps(verticalImagePlaneSize / 2);
 
-    float dx = horizontalImagePlaneSize / camera.width;
-    float dy = -verticalImagePlaneSize / camera.height;
+    __m256 dx = _mm256_set1_ps(horizontalImagePlaneSize / camera.width);
+    __m256 dy = _mm256_set1_ps(-verticalImagePlaneSize / camera.height);
 
-    for (int i = 0; i < numPixels; i += 8) {
-        int rayStructIdx = i / 8;
+    VectorAVX cameraPos(_mm256_set1_ps(camera.pos.x), _mm256_set1_ps(camera.pos.y), _mm256_set1_ps(camera.pos.z));
+    __m256 negOne = _mm256_set1_ps(-1.f);
 
-        for (int j = 0; j < 8; ++j) {
-            // TODO: Vectorize this code?
-            float x = x_0 + ((i + j) % camera.width) * dx;
-            float y = y_0 + ((i + j) / camera.width) * dy;
+    for (int rayIdx = 0; rayIdx < numRays; rayIdx += 1) {
+        // `i` is the pixel index
+        int i = rayIdx * 8;
 
-            Vector v = Vector(x, y, -1.f).normalized();
+        __m256 xIndex = _mm256_set_ps(
+            (i + 0) % camera.width,
+            (i + 1) % camera.width,
+            (i + 2) % camera.width,
+            (i + 3) % camera.width,
+            (i + 4) % camera.width,
+            (i + 5) % camera.width,
+            (i + 6) % camera.width,
+            (i + 7) % camera.width
+        );
 
-            rays[rayStructIdx].dir.x[j] = v.x;
-            rays[rayStructIdx].dir.y[j] = v.y;
-            rays[rayStructIdx].dir.z[j] = v.z;
+        __m256 yIndex = _mm256_set_ps(
+            (i + 0) / camera.width,
+            (i + 1) / camera.width,
+            (i + 2) / camera.width,
+            (i + 3) / camera.width,
+            (i + 4) / camera.width,
+            (i + 5) / camera.width,
+            (i + 6) / camera.width,
+            (i + 7) / camera.width
+        );
 
-            rays[rayStructIdx].pos.x[j] = camera.pos.x;
-            rays[rayStructIdx].pos.y[j] = camera.pos.y;
-            rays[rayStructIdx].pos.z[j] = camera.pos.z;
-        }
+        __m256 xOffset = _mm256_mul_ps(xIndex, dx);
+        __m256 yOffset = _mm256_mul_ps(yIndex, dy);
+        __m256 x = _mm256_add_ps(x_0, xOffset);
+        __m256 y = _mm256_add_ps(y_0, yOffset);
+
+        rays[rayIdx] = RayAVX(cameraPos, VectorAVX(x, y, negOne).normalized());
     }
 }
 
-void computeRayHits(RayAVX* rays, int numRays, int numRayStructs, Sphere* spheres, int numSpheres, Plane* planes, int numPlanes, RayHitAVX** pRayHits) {
-    RayHitAVX* rayHits = new RayHitAVX[numRayStructs];
+__m256 rayIntersectsSphereAVX(const RayAVX& ray, const Sphere& sphere, RayHitAVX& rayHit) {
+    VectorAVX spherePos = VectorAVX(sphere.pos);
+    __m256 sphereRad = _mm256_set1_ps(sphere.rad);
+    // Vector v = r.pos - s.pos;
+    VectorAVX v = ray.pos - spherePos;
+    // float b = 2 * r.dir.dot(v);
+    __m256 b = _mm256_mul_ps(_mm256_set1_ps(2.f), ray.dir.dot(v));
+    // float c = v.sqmag() - s.rad * s.rad;
+    __m256 c = _mm256_sub_ps(v.sqmag(), _mm256_mul_ps(sphereRad, sphereRad));
+    // float disc = b * b - 4 * a*c;
+    __m256 disc = _mm256_sub_ps(_mm256_mul_ps(b, b), _mm256_mul_ps(_mm256_set1_ps(4.f), c));
+    // if (disc < 0) return false;
+    // Bits are 1 if disc >= 0, and 0 otherwise.
+    __m256 discMask = _mm256_cmp_ps(_mm256_setzero_ps(), disc, _CMP_LT_OS);
+
+    uint8_t discFlags = _mm256_movemask_ps(discMask);
+
+    // To prevent taking the sqrt of a negative number, load 0 in place of disc[i], if disc[i] < 0.
+    // We will ignore this value later anyway, since disc < 0 means we don't have an intersection.
+    __m256 clampedDisc = _mm256_blendv_ps(_mm256_setzero_ps(), disc, discMask);
+
+    // float t = (-b - sqrt(disc)) / (2 * a);
+    __m256 sqrtDisc = _mm256_sqrt_ps(clampedDisc);
+    __m256 negBMinusSqrtDisc = _mm256_sub_ps(_mm256_mul_ps(_mm256_set1_ps(-1.f), b), sqrtDisc);
+    // Divide by 2*a (which is just 2, because a is 1)
+    __m256 t = _mm256_mul_ps(negBMinusSqrtDisc, _mm256_set1_ps(0.5f));
+    // if (t < 0) return false;
+    // Bits are 1 if t >= 0, and 0 otherwise
+    __m256 tMask = _mm256_cmp_ps(_mm256_setzero_ps(), t, _CMP_LT_OS);
+
+    // Even though some of these rays didn't actually have a hit, populate all hits anyway
+    // to avoid branching.
+    VectorAVX hitPos = ray.pos + ray.dir * t;
+    VectorAVX hitNorm = (hitPos - spherePos).normalized();
+    rayHit.pos = hitPos;
+    rayHit.norm = hitNorm;
+    rayHit.dir = ray.dir;
+
+    // Bits are 1 if we found an intersection, 0 otherwise
+    return _mm256_and_ps(discMask, tMask);
+}
+
+int computeRayHitsAVX(RayAVX* rays, int numRays, Sphere* spheres, int numSpheres, Plane* planes, int numPlanes, RayHitAVX** pRayHits, uint8_t** pHitFlags) {
+    int numIntersections = 0;
+    RayHitAVX* rayHits = (RayHitAVX*)_aligned_malloc(sizeof(RayHitAVX) * numRays, 32);
     *pRayHits = rayHits;
+    uint8_t* hitFlags = new uint8_t[numRays];
+    *pHitFlags = hitFlags;
 
-    for (int rayStructIdx = 0; rayStructIdx < numRayStructs; ++rayStructIdx) {
-
-    }
-
-
-
-
-    // We will have at most `numRays` hits
-    RayHit* rayHits = new RayHit[numRays];
-    *pRayHits = rayHits;
+    const __m256 infinity = _mm256_set1_ps(std::numeric_limits<float>::infinity());
 
     for (int rayIdx = 0; rayIdx < numRays; ++rayIdx) {
-        Ray ray = rays[rayIdx];
-        RayHit newHit, closestHit;
-        float closestHitDistanceSquared = std::numeric_limits<float>::infinity();
+        RayAVX ray = rays[rayIdx];
+        RayHitAVX newHit;
+        RayHitAVX closestHit;
+        uint8_t hitFound = 0;
+        __m256 closestHitDistanceSquared = infinity;
 
-        // Spheres
         for (int sphereIdx = 0; sphereIdx < numSpheres; ++sphereIdx) {
-            if (rayIntersectsSphere(ray, spheres[sphereIdx], newHit)) {
-                float newHitDistanceSquared = (newHit.pos - ray.pos).sqmag();
-                if (closestHitDistanceSquared > newHitDistanceSquared) {
-                    closestHit = newHit;
-                    closestHitDistanceSquared = newHitDistanceSquared;
-                }
-            }
-        }
-
-        // Planes
-        for (int planeIdx = 0; planeIdx < numPlanes; ++planeIdx) {
-            if (rayIntersectsPlane(ray, planes[planeIdx], newHit)) {
-                float newHitDistanceSquared = (newHit.pos - ray.pos).sqmag();
-
-                if (closestHitDistanceSquared > newHitDistanceSquared) {
-                    closestHit = newHit;
-                    closestHitDistanceSquared = newHitDistanceSquared;
-                }
-            }
+            __m256 newHitMask = rayIntersectsSphereAVX(ray, spheres[sphereIdx], newHit);
+            __m256 newHitDistanceSquared = _mm256_blendv_ps(infinity, (newHit.pos - ray.pos).sqmag(), newHitMask);
+            __m256 newHitDistanceLessThanClosest = _mm256_cmp_ps(newHitDistanceSquared, closestHitDistanceSquared, _CMP_LT_OS);
+            closestHitDistanceSquared = _mm256_blendv_ps(closestHitDistanceSquared, newHitDistanceSquared, newHitDistanceLessThanClosest);
+            closestHit.blend(newHit, newHitDistanceLessThanClosest);
+            uint8_t newHitFlags = _mm256_movemask_ps(newHitMask);
+            hitFound = hitFound | newHitFlags;
         }
 
         rayHits[rayIdx] = closestHit;
+        hitFlags[rayIdx] = hitFound;
+        numIntersections += __popcnt16(hitFound);
+    }
+
+    return numIntersections;
+}
+
+void selectIntersections(RayHitAVX* rayHits, uint8_t* hitFlags, int numRays, RayHitAVX** intersections, int& numIntersection) {
+
+}
+
+void hitsToRadiance(Vector* radiance, int numPixels, uint8_t* hitFlags) {
+    const Vector white(1.f, 1.f, 1.f);
+    const Vector black(0.f, 0.f, 0.f);
+
+    for (int i = 0; i < numPixels; ++i) {
+        uint8_t selector = 0b10000000;
+        int rayIdx = i / 8;
+        int slot = i % 8;
+        if (hitFlags[rayIdx] & (selector >> slot)) {
+            radiance[i] = white;
+        } else {
+            radiance[i] = black;
+        }
     }
 }
 
-
-void convertDiffuseToPixels(Vector* diffuse, unsigned char **pPixels, int numPixels) {
+void convertRadianceToPixels(Vector* radiance, unsigned char **pPixels, int numPixels) {
     unsigned char *pixels = new unsigned char[3 * numPixels];
     *pPixels = pixels;
 
     for (int i = 0; i < numPixels; ++i) {
-        Vector value = diffuse[i];
-        pixels[3 * i]     = (int) min(value.x * 255, 255);
-        pixels[3 * i + 1] = (int) min(value.y * 255, 255);
-        pixels[3 * i + 2] = (int) min(value.z * 255, 255);
-    }
-}
-
-void integrateReflection(Vector* diffuse, Vector* refDiffuse, int numReflectionRays, std::vector<int>& primaryRayIndices) {
-    for (int i = 0; i < numReflectionRays; ++i) {
-        int diffIdx = primaryRayIndices[i];
-        diffuse[diffIdx] = diffuse[diffIdx] + refDiffuse[i];
+        Vector value = radiance[i];
+        pixels[3 * i + 0] = (int)min(value.x * 255, 255);
+        pixels[3 * i + 1] = (int)min(value.y * 255, 255);
+        pixels[3 * i + 2] = (int)min(value.z * 255, 255);
     }
 }
 
@@ -295,78 +458,24 @@ int main()
     pointLights[0] = { { 19.f, 19.f, 1.f }, { 0.07f, 0.07f, 0.05f } };
     pointLights[1] = { { -19.f, 4.f, 4.f }, { 0.05f, 0.05f, 0.07f } };
     
+    // Compute image
+
     // Create primary rays
-    int numRays;
-    Ray* rays;
-    createPrimaryRays(camera, &rays, numRays);
+    RayAVX* primaryRays;
+    int numPixels;
+    int numPrimaryRays;
+    createPrimaryRaysAVX(camera, &primaryRays, numPixels, numPrimaryRays);
 
     // Compute primary ray hits
-    RayHit* rayHits;
-    computeRayHits(rays, numRays, spheres, numSpheres, planes, numPlanes, &rayHits);
+    RayHitAVX* rayHits;
+    uint8_t* hitFlags;
+    computeRayHitsAVX(primaryRays, numPrimaryRays, spheres, numSpheres, planes, numPlanes, &rayHits, &hitFlags);
 
-    delete[] rays;
-
-    // Compute direct illumination for primary ray hits
-    Vector* diffuse = new Vector[numRays];
-    for (int i = 0; i < numRays; ++i) {
-        diffuse[i] = { 0.f, 0.f, 0.f };
-    }
-    computePointLightDiffuse(rayHits, numRays, pointLights, numLights, diffuse, spheres, numSpheres, planes, numPlanes);
-
-    // Initialize map from rayHit index to primaryRay/pixel index (initialized to identity map)
-    std::vector<int>* primaryRayIndices = new std::vector<int>();
-    primaryRayIndices->resize(numRays);
-    for (int i = 0; i < numRays; ++i) {
-        (*primaryRayIndices)[i] = i;
-    }
-
-    int curNumRays = numRays;
-
-    // Compute contribution from reflections
-    for (int i = 0; i < 10; ++i) {
-        // Select rays which intersected with scene objects
-        std::vector<int>* reflectableRayHitIndices;
-        std::vector<int>* newPrimaryRayIndices;
-        int numReflectableRayHits;
-        selectReflectableIntersections(rayHits, curNumRays, &reflectableRayHitIndices, primaryRayIndices, &newPrimaryRayIndices, numReflectableRayHits);
-        delete primaryRayIndices;
-        primaryRayIndices = newPrimaryRayIndices;
-
-        RayHit* reflectableRayHits = new RayHit[numReflectableRayHits];
-        for (int j = 0; j < numReflectableRayHits; ++j) {
-            reflectableRayHits[j] = rayHits[(*reflectableRayHitIndices)[j]];
-        }
-
-        delete[] rayHits;
-
-        Ray* reflectionRays;
-        computeReflectionRays(reflectableRayHits, numReflectableRayHits, &reflectionRays);
-
-        delete[] reflectableRayHits;
-
-        // Compute reflection ray hits
-        RayHit* reflectionRayHits;
-        computeRayHits(reflectionRays, numReflectableRayHits, spheres, numSpheres, planes, numPlanes, &reflectionRayHits);
-
-        delete[] reflectionRays;
-
-        // Compute diffuse color for reflection ray hits
-        Vector* refDiffuse = new Vector[numReflectableRayHits];
-        for (int i = 0; i < numReflectableRayHits; ++i) {
-            refDiffuse[i] = { 0.f, 0.f, 0.f };
-        }
-        computePointLightDiffuse(reflectionRayHits, numReflectableRayHits, pointLights, numLights, refDiffuse, spheres, numSpheres, planes, numPlanes);
-
-        rayHits = reflectionRayHits;
-        curNumRays = numReflectableRayHits;
-
-        // Integrate diffuse from reflection rays with primary rays
-        integrateReflection(diffuse, refDiffuse, numReflectableRayHits, *primaryRayIndices);
-        delete[] refDiffuse;
-    }
+    Vector* radiance = new Vector[numPixels];
+    hitsToRadiance(radiance, numPixels, hitFlags);
 
     unsigned char* pixels;
-    convertDiffuseToPixels(diffuse, &pixels, numRays);
+    convertRadianceToPixels(radiance, &pixels, numPixels);
     writePPM(pixels, camera.width, camera.height, "..\\renders\\image.ppm");
 
     return 0;
