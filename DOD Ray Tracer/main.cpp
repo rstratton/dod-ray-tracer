@@ -6,6 +6,7 @@
 #include <limits>
 #include <immintrin.h>
 #include <intrin.h>
+#include <assert.h>
 
 #pragma warning(disable:4996)
 
@@ -15,6 +16,29 @@ inline float max(float a, float b) {
 
 inline float min(float a, float b) {
     return a < b ? a : b;
+}
+
+static inline __m256i unpack_24b_shufmask(unsigned int packed_mask) {
+    // alternative: broadcast / variable-shift.  Requires a vector constant, though.
+    // This strategy is probably better if the packed mask is coming directly from memory, esp. on Skylake where variable-shift is cheap
+    __m256i indices = _mm256_set1_epi32(packed_mask);
+    __m256i m = _mm256_sllv_epi32(indices, _mm256_setr_epi32(29, 26, 23, 20, 17, 14, 11, 8));
+    __m256i shufmask = _mm256_srli_epi32(m, 29);
+    return shufmask;
+}
+
+__m256 pack_ps(__m256 src, uint8_t mask) {
+    // Taken from https://stackoverflow.com/questions/36932240/avx2-what-is-the-most-efficient-way-to-pack-left-based-on-a-mask
+    unsigned expanded_mask = _pdep_u32(mask, 0b001'001'001'001'001'001'001'001);
+    expanded_mask += (expanded_mask<<1) + (expanded_mask<<2);  // ABC -> AAABBBCCC: triplicate each bit
+    // + instead of | lets the compiler implement it with a multiply by 7
+
+    const unsigned identity_indices = 0b111'110'101'100'011'010'001'000;    // the identity shuffle for vpermps, packed
+    unsigned wanted_indices = _pext_u32(identity_indices, expanded_mask);   // just the indices we want, contiguous in the low 24 bits or less.
+
+    // unpack the same as we would for the LUT version
+    __m256i shufmask = unpack_24b_shufmask(wanted_indices);
+    return _mm256_permutevar8x32_ps(src, shufmask);
 }
 
 struct Vector {
@@ -190,9 +214,138 @@ struct VectorAVX {
     }
 
     void blend(VectorAVX& o, __m256 mask) {
-        this->x = _mm256_blendv_ps(x, o.x, mask);
-        this->y = _mm256_blendv_ps(y, o.y, mask);
-        this->z = _mm256_blendv_ps(z, o.z, mask);
+        x = _mm256_blendv_ps(x, o.x, mask);
+        y = _mm256_blendv_ps(y, o.y, mask);
+        z = _mm256_blendv_ps(z, o.z, mask);
+    }
+
+    VectorAVX pack(uint8_t mask) {
+        return VectorAVX(
+            pack_ps(x, mask),
+            pack_ps(y, mask),
+            pack_ps(z, mask)
+        );
+    }
+};
+
+struct RayAVX {
+    VectorAVX pos;
+    VectorAVX dir;
+
+    RayAVX() {};
+    RayAVX(const VectorAVX& pos, const VectorAVX& dir) : pos(pos), dir(dir) {};
+};
+
+struct RayHitAVX {
+    VectorAVX pos;
+    VectorAVX norm;
+    VectorAVX dir;
+
+    void blend(RayHitAVX o, __m256 mask) {
+        pos.blend(o.pos, mask);
+        norm.blend(o.norm, mask);
+        dir.blend(o.dir, mask);
+    }
+
+    RayHitAVX pack(uint8_t hitFlags) {
+        RayHitAVX result;
+        result.pos = pos.pack(hitFlags);
+        result.dir = dir.pack(hitFlags);
+        result.norm = norm.pack(hitFlags);
+        return result;
+    }
+};
+
+struct VectorSOA {
+    float* x;
+    float* y;
+    float* z;
+    size_t size;
+
+    VectorSOA() = delete;
+    VectorSOA(const VectorSOA& other) = delete;
+    void operator=(const VectorSOA& other) = delete;
+    VectorSOA(size_t size) : size(size) {
+        // Allocate in multiples of 8 so that we can use AVX
+        size_t malloc_size = ((int)ceil(sizeof(float) * size / 8.f)) * 8;
+        x = (float*)_aligned_malloc(malloc_size, 32);
+        y = (float*)_aligned_malloc(malloc_size, 32);
+        z = (float*)_aligned_malloc(malloc_size, 32);
+    }
+    ~VectorSOA() {
+        _aligned_free(x);
+        _aligned_free(y);
+        _aligned_free(z);
+    }
+
+    void storeAligned(const VectorAVX& vec, size_t index) {
+        assert(index % 8 == 0);
+        _mm256_store_ps(x + index, vec.x);
+        _mm256_store_ps(y + index, vec.y);
+        _mm256_store_ps(z + index, vec.z);
+    }
+
+    VectorAVX loadAligned(size_t index) {
+        assert(index % 8 == 0);
+        return VectorAVX(
+            _mm256_load_ps(x + index),
+            _mm256_load_ps(y + index),
+            _mm256_load_ps(z + index)
+        );
+    }
+
+    void storeUnaligned(const VectorAVX& vec, size_t index) {
+        _mm256_storeu_ps(x + index, vec.x);
+        _mm256_storeu_ps(y + index, vec.y);
+        _mm256_storeu_ps(z + index, vec.z);
+    }
+};
+
+struct RaySOA {
+    VectorSOA pos;
+    VectorSOA dir;
+    size_t size;
+
+    RaySOA() = delete;
+    RaySOA(const RaySOA& other) = delete;
+    void operator=(const RaySOA& other) = delete;
+    RaySOA(size_t size) : size(size), pos(size), dir(size) {};
+
+    void storeAligned(const RayAVX& ray, size_t index) {
+        pos.storeAligned(ray.pos, index);
+        dir.storeAligned(ray.dir, index);
+    }
+
+    RayAVX loadAligned(size_t index) {
+        assert(index % 8 == 0);
+        return RayAVX(
+            pos.loadAligned(index),
+            dir.loadAligned(index)
+        );
+    }
+};
+
+struct RayHitSOA {
+    VectorSOA pos; // Location where the ray intersected the object
+    VectorSOA dir; // Direction of the incident ray
+    VectorSOA norm; // Normal of the surface
+    size_t size;
+
+    RayHitSOA() = delete;
+    RayHitSOA(const RayHitSOA& other) = delete;
+    void operator=(const RayHitSOA& other) = delete;
+    RayHitSOA(size_t size) : size(size), pos(size), dir(size), norm(size) {};
+
+    void storeAligned(const RayHitAVX& rayHit, size_t index) {
+        pos.storeAligned(rayHit.pos, index);
+        dir.storeAligned(rayHit.dir, index);
+        norm.storeAligned(rayHit.norm, index);
+    }
+
+    void storeUnaligned(const RayHitAVX& rayHit, size_t index) {
+        pos.storeUnaligned(rayHit.pos, index);
+        dir.storeUnaligned(rayHit.dir, index);
+        norm.storeUnaligned(rayHit.norm, index);
     }
 };
 
@@ -224,34 +377,14 @@ struct PointLight {
     Vector color;
 };
 
-struct RayAVX {
-    VectorAVX pos;
-    VectorAVX dir;
-
-    RayAVX() {};
-    RayAVX(const VectorAVX& pos, const VectorAVX& dir) : pos(pos), dir(dir) {};
-};
-
-struct RayHitAVX {
-    VectorAVX pos;
-    VectorAVX norm;
-    VectorAVX dir;
-
-    void blend(RayHitAVX o, __m256 mask) {
-        pos.blend(o.pos, mask);
-        norm.blend(o.norm, mask);
-        dir.blend(o.dir, mask);
-    }
-};
 
 float degToRad(float deg) {
     return deg * M_PI / 180.f;
 }
 
-void createPrimaryRaysAVX(Camera camera, RayAVX** pRays, int& numPixels, int& numRays) {
-    numPixels = camera.width * camera.height;
-    numRays = ceil(numPixels / 8.f);
-    RayAVX* rays = (RayAVX*)_aligned_malloc(sizeof(RayAVX) * numRays, 32);
+void createPrimaryRays(Camera camera, RaySOA** pRays, int& numRays) {
+    numRays = camera.width * camera.height;
+    RaySOA* rays = new RaySOA(numRays);
     *pRays = rays;
 
     float verticalImagePlaneSize = 2 * tanf(degToRad(camera.verticalFov / 2));
@@ -266,10 +399,9 @@ void createPrimaryRaysAVX(Camera camera, RayAVX** pRays, int& numPixels, int& nu
     VectorAVX cameraPos(_mm256_set1_ps(camera.pos.x), _mm256_set1_ps(camera.pos.y), _mm256_set1_ps(camera.pos.z));
     __m256 negOne = _mm256_set1_ps(-1.f);
 
-    for (int rayIdx = 0; rayIdx < numRays; rayIdx += 1) {
-        // `i` is the pixel index
-        int i = rayIdx * 8;
-
+    int limit = (int)ceil(numRays / 8.f);
+    for (int i = 0; i < limit; i += 8) {
+        // TODO: is there some more clever way to do this in AVX using floating point ops and rounding?
         __m256 xIndex = _mm256_set_ps(
             (i + 0) % camera.width,
             (i + 1) % camera.width,
@@ -297,7 +429,8 @@ void createPrimaryRaysAVX(Camera camera, RayAVX** pRays, int& numPixels, int& nu
         __m256 x = _mm256_add_ps(x_0, xOffset);
         __m256 y = _mm256_add_ps(y_0, yOffset);
 
-        rays[rayIdx] = RayAVX(cameraPos, VectorAVX(x, y, negOne).normalized());
+        RayAVX ray(cameraPos, VectorAVX(x, y, negOne).normalized());
+        rays->storeAligned(ray, i);
     }
 }
 
@@ -343,6 +476,40 @@ __m256 rayIntersectsSphereAVX(const RayAVX& ray, const Sphere& sphere, RayHitAVX
     return _mm256_and_ps(discMask, tMask);
 }
 
+void computeRayIntersections(RaySOA* rays, int numRays, Sphere* spheres, int numSpheres, RayHitSOA** pRayHits, int& numIntersections) {
+    numIntersections = 0;
+    RayHitSOA* rayHits = new RayHitSOA(numRays);
+    *pRayHits = rayHits;
+    
+    const __m256 infinity = _mm256_set1_ps(std::numeric_limits<float>::infinity());
+
+    int limit = (int)ceil(numRays / 8.f);
+    int rayHitIdx = 0;
+    for (int i = 0; i < limit; i += 8) {
+        RayAVX ray(rays->loadAligned(i));
+        RayHitAVX newHit;
+        RayHitAVX closestHit;
+        uint8_t hitFlags = 0; // 1 if hit, 0 if no hit
+        __m256 closestHitDistanceSquared = infinity;
+
+        // Find closest intersections
+        for (int sphereIdx = 0; sphereIdx < numSpheres; ++sphereIdx) {
+            __m256 newHitMask = rayIntersectsSphereAVX(ray, spheres[sphereIdx], newHit);
+            __m256 newHitDistanceSquared = _mm256_blendv_ps(infinity, (newHit.pos - ray.pos).sqmag(), newHitMask);
+            __m256 newHitDistanceLessThanClosest = _mm256_cmp_ps(newHitDistanceSquared, closestHitDistanceSquared, _CMP_LT_OS);
+            closestHitDistanceSquared = _mm256_blendv_ps(closestHitDistanceSquared, newHitDistanceSquared, newHitDistanceLessThanClosest);
+            closestHit.blend(newHit, newHitDistanceLessThanClosest);
+            uint8_t newHitFlags = _mm256_movemask_ps(newHitMask);
+            hitFlags = hitFlags | newHitFlags;
+        }
+
+        // Pack and store intersections
+        RayHitAVX packedHit(closestHit.pack(hitFlags));
+        rayHits->storeUnaligned(packedHit, numIntersections);
+        numIntersections += __popcnt16(hitFlags);
+    }
+}
+
 int computeRayHitsAVX(RayAVX* rays, int numRays, Sphere* spheres, int numSpheres, Plane* planes, int numPlanes, RayHitAVX** pRayHits, uint8_t** pHitFlags) {
     int numIntersections = 0;
     RayHitAVX* rayHits = (RayHitAVX*)_aligned_malloc(sizeof(RayHitAVX) * numRays, 32);
@@ -375,10 +542,6 @@ int computeRayHitsAVX(RayAVX* rays, int numRays, Sphere* spheres, int numSpheres
     }
 
     return numIntersections;
-}
-
-void selectIntersections(RayHitAVX* rayHits, uint8_t* hitFlags, int numRays, RayHitAVX** intersections, int& numIntersection) {
-
 }
 
 void hitsToRadiance(Vector* radiance, int numPixels, uint8_t* hitFlags) {
@@ -461,22 +624,21 @@ int main()
     // Compute image
 
     // Create primary rays
-    RayAVX* primaryRays;
-    int numPixels;
-    int numPrimaryRays;
-    createPrimaryRaysAVX(camera, &primaryRays, numPixels, numPrimaryRays);
+    RaySOA* primaryRays;
+    int numRays;
+    createPrimaryRays(camera, &primaryRays, numRays);
 
     // Compute primary ray hits
-    RayHitAVX* rayHits;
-    uint8_t* hitFlags;
-    computeRayHitsAVX(primaryRays, numPrimaryRays, spheres, numSpheres, planes, numPlanes, &rayHits, &hitFlags);
+    RayHitSOA* rayHits;
+    int numIntersections;
+    computeRayIntersections(primaryRays, numRays, spheres, numSpheres, &rayHits, numIntersections);
 
-    Vector* radiance = new Vector[numPixels];
-    hitsToRadiance(radiance, numPixels, hitFlags);
+    //Vector* radiance = new Vector[numPixels];
+    //hitsToRadiance(radiance, numPixels, hitFlags);
 
-    unsigned char* pixels;
-    convertRadianceToPixels(radiance, &pixels, numPixels);
-    writePPM(pixels, camera.width, camera.height, "..\\renders\\image.ppm");
+    //unsigned char* pixels;
+    //convertRadianceToPixels(radiance, &pixels, numPixels);
+    //writePPM(pixels, camera.width, camera.height, "..\\renders\\image.ppm");
 
     return 0;
 }
