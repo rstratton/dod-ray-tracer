@@ -510,7 +510,7 @@ __m256 rayIntersectsSphereAVX(const RayAVX& ray, const Sphere& sphere, RayHitAVX
     __m256 disc = _mm256_sub_ps(_mm256_mul_ps(b, b), _mm256_mul_ps(_mm256_set1_ps(4.f), c));
     // if (disc < 0) return false;
     // Bits are 1 if disc >= 0, and 0 otherwise.
-    __m256 discMask = _mm256_cmp_ps(_mm256_setzero_ps(), disc, _CMP_LT_OS);
+    __m256 discMask = _mm256_cmp_ps(disc, _mm256_setzero_ps(), _CMP_NLT_US);
 
     uint8_t discFlags = _mm256_movemask_ps(discMask);
 
@@ -525,7 +525,7 @@ __m256 rayIntersectsSphereAVX(const RayAVX& ray, const Sphere& sphere, RayHitAVX
     __m256 t = _mm256_mul_ps(negBMinusSqrtDisc, _mm256_set1_ps(0.5f));
     // if (t < 0) return false;
     // Bits are 1 if t >= 0, and 0 otherwise
-    __m256 tMask = _mm256_cmp_ps(_mm256_setzero_ps(), t, _CMP_LT_OS);
+    __m256 tMask = _mm256_cmp_ps(t, _mm256_setzero_ps(), _CMP_NLT_US);
 
     // Even though some of these rays didn't actually have a hit, populate all hits anyway
     // to avoid branching.
@@ -568,7 +568,7 @@ __m256 rayIntersectsPlaneAVX(const RayAVX& ray, const Plane& plane, RayHitAVX& r
     __m256 t = _mm256_div_ps(numerator, maskedDenom);
     // if (t < 0) return false;
     // Bits are 1 if t >= 0, and 0 otherwise
-    __m256 tMask = _mm256_cmp_ps(_mm256_setzero_ps(), t, _CMP_LT_OS);
+    __m256 tMask = _mm256_cmp_ps(t, _mm256_setzero_ps(), _CMP_NLT_US);
 
     // Even though some of these rays didn't actually have a hit, populate all hits anyway
     // to avoid branching.
@@ -735,8 +735,8 @@ void computeDirectIllumination(VectorSOA** pRadiance, RayHitSOA* hits, int numIn
 void accumulateRadiance(VectorSOA* accumulator, VectorSOA* newValues, int numNewValues, int* indexMap) {
     for (int i = 0; i < numNewValues; ++i) {
         accumulator->x[indexMap[i]] += newValues->x[i];
-        accumulator->y[indexMap[i]] += newValues->x[i];
-        accumulator->z[indexMap[i]] += newValues->x[i];
+        accumulator->y[indexMap[i]] += newValues->y[i];
+        accumulator->z[indexMap[i]] += newValues->z[i];
     }
 }
 
