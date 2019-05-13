@@ -483,8 +483,7 @@ void computeRayIntersections(RaySOA* rays, int numRays, Sphere* spheres, int num
     
     const __m256 infinity = _mm256_set1_ps(std::numeric_limits<float>::infinity());
 
-    int limit = (int)ceil(numRays / 8.f);
-    int rayHitIdx = 0;
+    int limit = (int)ceil(numRays / 8.f) * 8;
     for (int i = 0; i < limit; i += 8) {
         RayAVX ray(rays->loadAligned(i));
         RayHitAVX newHit;
